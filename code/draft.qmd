@@ -1,0 +1,208 @@
+```{r}
+#| echo: false
+#| eval: false
+
+# run this cell manually to download packages 
+source("downloadpackages.R")
+```
+
+```{r}
+#| echo: false
+#| eval: false
+
+# run this cell manually to restore the project library
+
+if (!requireNamespace("renv")) {
+  stop("Please download the required packages by running the first cell in this document.")
+}
+
+renv::restore()
+```
+
+
+```{r}
+#| echo: false
+requireNamespace("dplyr")
+
+source("loaddata.R")
+```
+
+# Draft
+
+## Github URL
+
+https://github.com/ivanharvard/gov51-privacy
+
+## Loading and Exploring Data
+
+We will load in our data first.
+
+```{r}
+years <- names(cfg$cces)
+
+cces_2016 <- read_dta_from_path(get_data_path("cces", "2016"))
+cces_2018 <- read_dta_from_path(get_data_path("cces", "2018"))
+cces_2020 <- read_dta_from_path(get_data_path("cces", "2020"))
+cces_2022 <- read_dta_from_path(get_data_path("cces", "2022"))
+cces_2024 <- read_dta_from_path(get_data_path("cces", "2024"))
+```
+
+Now, let's test that we can filter the data by state. For instance, let's look at the data from California across all years. We'll count the number of respondents from California in each year.
+
+`inputstate` is the variable in the CCES datasets that indicates the state of the respondent pre-election.
+
+```{r}
+california_counts <- data.frame(
+  year = years,
+  count = c(
+    sum(cces_2016$inputstate == "California"),
+    sum(cces_2018$inputstate == "California"),
+    sum(cces_2020$inputstate == "California"),
+    sum(cces_2022$inputstate == "California"),
+    sum(cces_2024$inputstate == "California")
+  )
+)
+
+california_counts
+```
+
+> The CCES also provides `inputstate_post`, which is the state of residence of the respondent post-election. But, we can assume people aren't systematically moving across states in response to privacy laws, so we'll just use `inputstate` for our analysis.
+
+## Finding Personal Questions
+
+Next, we need to find variables in the CCES datasets that:
+- allow respondents to refuse/skip/not answer the question
+- are about personal, possibly sensitive information about the respondents.
+
+> This next code block will take a long time to execute!
+
+```{r}
+cces_list <- list(
+  cces_2016,
+  cces_2018,
+  cces_2020,
+  cces_2022,
+  cces_2024
+)
+
+# find the intersection of variable names across all datasets
+common_vars <- Reduce(intersect, lapply(cces_list, names))
+
+# now look for any of these keywords in the variable names to find potentially 
+# sensitive variables
+sensitive_vars <- grep(
+  "relig|income|race|gender|sexual|citizen|immig",
+  common_vars,
+  value = TRUE
+)
+
+sensitive_vars
+```
+
+One of the options was `sexuality`, which is going to be reasonably personal. Let's check how many people refused to answer this question in each year.
+
+Let's make sure that this variable has options like "Prefer not to say" or "Skipped." We'll take a look at `cces_2016` for now.
+```{r}
+levels(cces_2016$sexuality)
+``` 
+
+Now ensure every other year has the same options for this variable.
+```{r}
+all_same_values_case_insensitive <- function(var) {
+  levels_list <- lapply(cces_list, function(df) tolower(levels(df[[var]])))
+  first <- levels_list[[1]]
+  
+  all(sapply(levels_list, function(x) setequal(x, first)))
+}
+
+all_same_values_case_insensitive("sexuality")
+```
+
+We'll consider any response that is "Prefer not to say" or "Skipped" as non-disclosure. Every other response will be counted as a disclosure, with the sole exception for "Not Asked", which we will exclude from the analysis entirely.
+
+## Analyzing and Plotting Data
+
+Because each of the CCES datasets are in the hundreds to thousands of megabytes, we'll export just the important statistics we need from each year.
+
+```{r}
+make_df <- function(df, year) {
+  data.frame(
+    year = year,
+    is_ca = as.integer(df$inputstate == "California"),
+    sexuality = df$sexuality
+  )
+}
+
+df_2016 <- make_df(cces_2016, 2016)
+df_2018 <- make_df(cces_2018, 2018)
+df_2020 <- make_df(cces_2020, 2020)
+df_2022 <- make_df(cces_2022, 2022)
+df_2024 <- make_df(cces_2024, 2024)
+
+cces_small <- rbind(
+  df_2016,
+  df_2018,
+  df_2020,
+  df_2022,
+  df_2024
+)
+```
+
+Now, let's mark whether each respondent disclosed their sexuality or not.
+
+```{r}
+make_disclosed_sexuality <- function(x) {
+  x.lower <- tolower(x)
+
+  ifelse(
+    x.lower == "not asked",
+    NA, # set "not asked" to NA
+    ifelse(
+      x.lower %in% c("prefer not to say", "skipped") | is.na(x.lower),
+      0, # non-disclosure or non-response
+      1  # disclosure
+    )
+  )
+}
+
+cces_small$disclosed_sexuality <- make_disclosed_sexuality(cces_small$sexuality)
+```
+
+Finally, we'll graph the plot of non-disclosure over time, comparing California to the rest of the country.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+trend_df <- cces_small %>%
+  group_by(year, is_ca) %>%
+  summarize(
+    mean_nondisclosure = 1 - mean(disclosed_sexuality, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    group = ifelse(is_ca == 1, "California", "Rest of US")
+  )
+
+p <- ggplot(trend_df, aes(x = year, y = mean_nondisclosure, color = group)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Willingness to Not Disclose Sexuality Over Time",
+    x = "Year",
+    y = "Proportion Not Disclosing Sexuality",
+  ) +
+  theme_minimal()
+
+ggsave("../images/sexuality_disclosure.png", plot = p)
+p
+```
+
+There's a few important features of the graph. Firstly, non-disclosure itself is already quite low, hovering around 2-3 percent for the rest of the US. Secondly, both the US and California show a larger spike in non-disclosure in 2020, which is likely due to the COVID-19 pandemic. Finally, California has a slightly higher rate of non-disclosure than the rest of the US overall.
+
+## Interpretation and Next Steps
+
+It is hard to determine whether the effects of the pandemic are masking any effects of the California privacy law. As it stands now, it does not seem like the California privacy law has had a large effect on non-disclosure of sexuality, but this can entirely be due to the confounding effects of the pandemic. 
+
+Our next steps will be to look for other personal questions in the CCES datasets. Perhaps, we can create some kind of "index" that scores the respondent's overall willingness to disclose personal information, and see how that changes over time. We can also use a DiDiD approach to try to control for the confounding effects of the pandemic. For instance, if we determine that the `age` variable is a neutral, non-personal variable that is also affected by the pandemic, we can use that as a control to try to isolate the effects of the California privacy law on non-disclosure.

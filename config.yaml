@@ -1,0 +1,18 @@
+default:
+  root: !expr Sys.getenv("DATA_DIR", unset = "../data")
+
+  cces:
+    2016:
+      dta: "raw/cces2016/CCES16_Common_OUTPUT_Feb2018_VV.dta"
+    2018:
+      dta: "raw/cces2018/cces18_common_vv.dta"
+    2020:
+      dta: "raw/cces2020/CES20_Common_OUTPUT_vv.dta"
+    2022:
+      dta: "raw/cces2022/CCES22_Common_OUTPUT_vv_topost.dta"
+    2024:
+      dta: "raw/cces2024/CCES24_Common_OUTPUT_vv_topost_final.dta"
+
+  recontact:
+    2020_2022:
+      dta: "raw/recontact2020-2022/merged_recontact.dta"

@@ -1,2 +1,4 @@
 data/raw/*
 !data/raw/.gitkeep
+code/renv/*
+.DS_Store
