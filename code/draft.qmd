@@ -31,7 +31,7 @@ source("loaddata.R")
 
 ## Github URL
 
-https://github.com/ivanharvard/gov51-privacy
+https://github.com/ivanharvard/gov51-project
 
 ## Loading and Exploring Data
 

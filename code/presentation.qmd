@@ -1,0 +1,195 @@
+# Draft Pt. II (Presentation)
+
+## Github URL
+
+https://github.com/ivanharvard/gov51-project
+
+## Continuation of Draft
+
+We'll continue our work from the previous draft, where we loaded in the CCES datasets and measured the non-response of sexuality across different years.
+
+```{r}
+#| warning: false
+#| message: false
+
+# run all R chunks in draft.qmd
+invisible(knitr::knit_child("draft.qmd", quiet = TRUE))
+```
+
+## Difference in Differences Analysis
+
+### Assumptions
+
+Difference in Differences (DiD) is a quasi-experimental design that allows us to estimate the causal effect of a tratment or intervention by comparing changes in outcomes over time between a treatment group and some control group.
+The most basic assumption for DiD is the "parallel trends" assumption, which states that in the absence of treatment, the average change in the outcome variable would've been the same for both the treatment and control groups.
+
+Another way to put this is that the treatment and control groups would have approximately parallel lines when we plot the outcome variable over time, before the treatment is applied.
+
+Let's confirm whether this is true or not.
+
+#### Creating a Non-Disclosure Index
+
+As we've seen in our previous results, non-disclosure in sexuality is already quite low, hovering around 2-3\% total. This implies low variance and very high sensitivity to noise. To address this, we'll create a non-disclosure index based on some variables we find manually in the CCES datasets that seem to be about personal information (such as wealth/assets, income, religion, identity, etc.). Unfortunately, the way the survey is designed, questions on religion and immigration status are not given answers like "prefer not to say" or allow the survey taker to skip the question, so we won't be able to use those variables in our non-disclosure index (as such, their non-disclosure rate is always 0). Some other variables, like sexuality, transgender identity, and family income do have non-disclosure options, so we'll use those variables in our non-disclosure index.
+
+Since some variables go by different names across years, we'll merge them together into a single variable that represents that concept across all years.
+
+```{r}
+# recreate cces_small with the new variables we care about
+make_df <- function(df, year) {
+  data.frame(
+    year = year,
+    is_ca = as.integer(df$inputstate == "California"),
+    faminc = if ("faminc" %in% names(df)) {
+                as.character(haven::as_factor(df$faminc))
+             } else if ("faminc_new" %in% names(df)) {
+                as.character(haven::as_factor(df$faminc_new))
+             } else {
+                rep(NA_character_, nrow(df))
+             },              # family income
+    trans = if ("trans" %in% names(df)) {
+                as.character(haven::as_factor(df$trans))
+            } else if ("transgender" %in% names(df)) {
+                as.character(haven::as_factor(df$transgender))
+            } else {
+                rep(NA_character_, nrow(df))
+            },               # transgender
+    sexuality = df$sexuality # sexuality
+  )
+}
+
+df_2016 <- make_df(cces_2016, 2016)
+df_2018 <- make_df(cces_2018, 2018)
+df_2020 <- make_df(cces_2020, 2020)
+df_2022 <- make_df(cces_2022, 2022)
+df_2024 <- make_df(cces_2024, 2024)
+
+cces_small <- rbind(
+    df_2016, 
+    df_2018,
+    df_2020, 
+    df_2022, 
+    df_2024
+)
+```
+
+```{r}
+sensitive_vars <- c(
+  "faminc",
+  "trans",
+  "sexuality"
+)
+
+make_nondisclosed <- function(x) {
+    x_char <- tolower(trimws(as.character(x)))
+
+    case_when(
+        # Not asked
+        x_char %in% c("not asked") ~ NA_real_,
+        
+        # Non-disclosure
+        x_char %in% c("prefer not to say", "skipped") ~ 1,
+        
+        # Everything else = disclosure
+        TRUE ~ 0
+    )
+}
+
+for (var in sensitive_vars) {
+    cces_small[[paste0("nd_", var)]] <- make_nondisclosed(cces_small[[var]])
+}
+
+nondisclosure_vars <- paste0("nd_", sensitive_vars)
+
+cces_small$nondisclosure_index <- rowMeans(
+    cces_small[, nondisclosure_vars],
+    na.rm = TRUE
+)
+```
+
+Now, we are ready to plot our nondisclosure index pre-treatment.
+
+```{r}
+trend_index_df <- cces_small %>%
+    group_by(year, is_ca) %>%
+    summarize(
+        mean_nondisclosure_index = mean(nondisclosure_index, na.rm = TRUE),
+        .groups = "drop"
+    ) %>%
+    mutate(
+        group = ifelse(is_ca == 1, "California", "Rest of US")
+    )
+
+ggplot(trend_index_df, aes(x = year, y = mean_nondisclosure_index, color = group)) +
+    geom_line(linewidth = 1) +
+    geom_point() +
+    scale_y_continuous(labels = scales::percent) +
+    labs(
+        title = "Non-Disclosure Index Over Time",
+        x = "Year",
+        y = "Average Non-Disclosure Index"
+    ) +
+    theme_minimal()
+```
+
+From the graph, we see that California generally has a higher non-disclosure index than the rest of the US. It's hard to justify as entirely parallel trends, but both groups tend to trend upwards and the gap remains relatively stable (although the graph makes this looks more exaggerated than it really is, since the non-disclosure index is quite low in general). Additionally, variables like sexuality and transgender identity were not measured pre-2016, which means data pre-2016 cannot be used in our DiD analysis, leading to us rely on a very small amount of time periods to establish parallel trends. 
+
+We'll assume that the parallel trends assumption is satisfied enough for us to proceed with our DiD analysis, but we should be cautious when interpreting our results.
+
+### Stating our Hypothesis 
+
+Let the null hypothesis be the claim that the CCPA had no effect on non-disclosure in California. 
+
+Let the alternative hypothesis be the claim that the CCPA caused an increase in non-disclosure in California, relative to the rest of the US.
+
+In other words:
+
+$$H_0: \beta_{DiD} = 0$$
+
+$$H_A: \beta_{DiD} > 0$$
+
+### Running the DiD Regression
+
+Having established our assumptions and our hypothesis, we run a simple DiD regression where the outcome variable is the non-disclosure index and the treatment variable is captured by an interaction term between being in California and being in the post-treatment period (2020 and onwards).
+
+```{r}
+cces_small$post <- as.integer(cces_small$year >= 2020)
+
+model <- lm(
+  nondisclosure_index ~ is_ca * post + factor(year),
+  data = cces_small
+)
+summary(model)
+```
+
+In our model, this interaction term is called `is_ca:post`. We see that the value is `r summary(model)$coefficients["is_ca:post", "Estimate"]` and the p-value is `r summary(model)$coefficients["is_ca:post", "Pr(>|t|)"]`. In other words, after 2020, non-disclosure in California is about .27 percentage points higher than in the rest of the US, relative to pre-2020 differences. However, this result is not statistically significant at the $\alpha = 0.05$ level. It is, however, significant at the $\alpha = 0.10$ level, which means that we have some weak, suggestive (rather than conclusive) evidence to reject the null hypothesis in favor of the alternative hypothesis.
+
+### Was COVID or the privacy law the shock?
+
+It's clear that in 2020 there was a large spike in the non-disclosure index (as indicated by both the graph and the coefficient `factor(year)2020` being larger than other years), both for California and the rest of the US. What's not entirely clear is whether this spike was due to the implementation of the CCPA or the COVID-19 pandemic, which also started in 2020 (or even some other factor that we aren't accounting for). To try to disentangle these two effects, let's change
+
+```{r}
+model2 <- lm(
+  nondisclosure_index ~ is_ca * factor(year),
+  data = cces_small
+)
+
+summary(model2)
+```
+```{r}
+cces_small$placebo_post <- as.integer(cces_small$year >= 2018)
+
+placebo_model <- lm(
+  nondisclosure_index ~ is_ca * placebo_post + factor(year),
+  data = cces_small
+)
+
+summary(placebo_model)
+
+lm(nd_faminc ~ is_ca * post + factor(year), data = cces_small)
+lm(nd_sexuality ~ is_ca * post + factor(year), data = cces_small)
+lm(nd_trans ~ is_ca * post + factor(year), data = cces_small)
+
+```
+```{r}
+lm(nd_faminc ~ is_ca * placebo_post + factor(year), data = cces_small)
+```
