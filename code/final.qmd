@@ -1,0 +1,436 @@
+---
+title: "Measuring the Impact of Privacy Laws: Non-Disclosure Rates Post-CCPA"
+author: 
+    name: "Ivan Gutierrez"
+    affiliation: "Harvard University"
+date: "2026-05-11"
+bibliography: ../references/references.bib
+csl: ../references/mla.csl
+github: "https://github.com/ivanharvard/gov51-project"
+---
+
+# Github URL
+
+https://github.com/ivanharvard/gov51-project
+
+# Introduction
+
+In 2015, the Pew Research Center found that 74\% of Americans believed it was very important to control who can have access to their personal information, and 65\% said the same thing about controlling what information was collected about them [@madden2015]. In response to growing data privacy concerns, California enacted the California Consumer Privacy Act (CCPA) in 2018, which came into effect in 2020. The CCPA grants California residents the right to know what personal data is being collected about them, the right to delete their personal data, and the right to opt-out of the sale of their personal data, particularly in the context of data collected by businesses.
+
+The CCPA was one of the major pioneers for modern privacy laws and revolutionized how consumers and businesses think about data. For businesses, this meant greater compliance requirements regarding the collection, storing, and sharing of user data. For consumers, this meant increased transparency and greater control over how their personal data is collected and used. However, the impact of the CCPA on other aspects of life, such as the willingness to disclose personal information, has not been extensively studied. This project aims to fill that gap by analyzing whether the implementation of the CCPA has influenced the rates of non-disclosure of personal information in survey responses in California compared to the rest of the United States.
+
+## Research Question and Hypothesis
+
+Our investigation seeks to determine whether stronger privacy laws, such as the CCPA, serve as a cause that make people more willing to voluntarily disclose personal, sensitive information. The underlying assumption is that if people feel more secure about their data privacy, they may be more likely to share personal information, even though these privacy laws are directed at business practices rather than individual behavior. Individuals being notified of a company updating their privacy policy, media coverage of the CCPA, or even just the general awareness of the law could serve as plausible mechanisms through which the CCPA could influence disclosure behavior. 
+
+If true, the CCPA might have increased non-disclosure rates in California relative to the rest of the US. More formally, our hypothesis can be described as follows:
+
+$$
+\begin{aligned}
+H_0 &: \text{The CCPA has no effect on non-disclosure rates of sensitive questions} \\
+    &\quad \text{in California relative to respondents in other states.} \\
+\\
+H_A &: \text{The CCPA increases non-disclosure rates of sensitive questions} \\
+    &\quad \text{in California relative to respondents in other states.}
+\end{aligned}
+$$
+
+# Data and Measurement
+
+To investigate the impact of the CCPA on non-disclosure rates, we will utilize data from the Cooperative Congressional Election Study (CCES), a large scale study that collects a wide range of demographic and political information from respondents across the United States. Each unit of observation (i.e., each row) in the CCES datasets corresponds to a single respondent who opted-in to participate in the study. We will focus on the years 2016 to 2024, which will allow us to compare non-disclosure rates before and after the implementation of the CCPA. 
+
+There are a few concerns applicable to our analysis. Firstly, the CCES only runs this survey at this scale every two years (every election year), so we will only have data from 2016, 2018, 2020, 2022, and 2024. Thankfully, most of these surveys have over 50,000 respondents per survey, so we should have enough statistical power to detect effects even with a small number of time periods. Secondly, the CCES does not always offer the same questions across all years, so we will only be able to analyze a subset of questions that are consistently asked across all years. Thirdly, the CCES does not provide non-disclosure as an option for all questions, so we will have to create an even smaller subset of questions that are both personal enough to warrant non-disclosure and that also offer non-disclosure as an option.
+
+Even then, non-disclosure rates may be inherently rare, which could make it difficult to detect any effects. To address this, we will create a non-disclosure index that captures the average non-disclosure rate across a set of personal questions that have been asked consistently over the years, which should limit random noise and give us a more stable measure of non-disclosure. Non-disclosure will be defined as respondents either explicitly choosing options like "prefer not to say" or skipping the question entirely, as both of these options indicate a reluctance to disclose personal information.
+
+## Loading Data
+
+```{r}
+#| echo: false
+#| eval: false
+
+# run this cell manually to download packages 
+source("downloadpackages.R")
+```
+
+```{r}
+#| echo: false
+#| eval: false
+
+# run this cell manually to restore the project library
+
+if (!requireNamespace("renv")) {
+  stop("Please download the required packages by running the first cell in this document.")
+}
+
+renv::restore()
+```
+
+```{r}
+#| echo: false
+#| messages: false
+#| warning: false
+requireNamespace("dplyr")
+requireNamespace("ggplot2")
+library(dplyr)
+library(ggplot2)
+
+source("loaddata.R")
+```
+
+```{r}
+# We've loaded external R files and configuration details to help us read in the 
+# data, which you can find in code/loaddata.R and config.yaml
+years <- names(cfg$cces)
+
+cces_2016 <- read_dta_from_path(get_data_path("cces", "2016"))
+cces_2018 <- read_dta_from_path(get_data_path("cces", "2018"))
+cces_2020 <- read_dta_from_path(get_data_path("cces", "2020"))
+cces_2022 <- read_dta_from_path(get_data_path("cces", "2022"))
+cces_2024 <- read_dta_from_path(get_data_path("cces", "2024"))
+```
+
+## Creating the Non-Disclosure Index and Summary Statistics
+
+By looking at the CCES guides for each of the respective years, we found a few potentially promising questions that are both personal enough to warrant non-disclosure and that also offer non-disclosure as an option. These questions are on:
+
+- `faminc`: family income
+
+- `sexuality`: sexual orientation
+
+- `trans`: whether the respondent identifies as transgender/has gone under gender transition
+
+- `religpew_t`: religion
+
+- `employ_t`: employment status
+
+- `ownhome`: home ownership
+
+```{r}
+clean_factor <- function(x) {
+  y <- as.character(haven::as_factor(x))
+  y[tolower(trimws(y)) %in% c("__na__", "na", "n/a", "")] <- NA_character_
+  y
+}
+
+# the CCES is large in size, so we'll just consider the subset of variables
+# we care about for our analysis
+make_df <- function(df, year) {
+  data.frame(
+    year = year,
+    is_ca = as.integer(df$inputstate == "California"),
+    faminc = if ("faminc" %in% names(df)) {
+                clean_factor(df$faminc)
+             } else if ("faminc_new" %in% names(df)) {
+                clean_factor(df$faminc_new)
+             } else {
+                rep(NA_character_, nrow(df))
+             },              # family income
+    trans = if ("trans" %in% names(df)) {
+                clean_factor(df$trans)
+            } else if ("transgender" %in% names(df)) {
+                clean_factor(df$transgender)
+            } else {
+                rep(NA_character_, nrow(df))
+            },                # transgender
+    sexuality = clean_factor(df$sexuality), # sexuality
+    religion  = if ("religpew_t" %in% names(df)) {
+                    clean_factor(df$religpew_t)
+                } else {
+                    rep(NA_character_, nrow(df))
+                },              # religion
+    employ = if ("employ_t" %in% names(df)) {
+                    clean_factor(df$employ_t)
+                } else {
+                    rep(NA_character_, nrow(df))
+                },              # employment status
+    ownhome = if ("ownhome_t" %in% names(df)) {
+                    clean_factor(df$ownhome_t)
+                } else {
+                    rep(NA_character_, nrow(df))
+                },             # home ownership
+    pid3_t  = if ("pid3_t" %in% names(df)) {
+                    clean_factor(df$pid3_t)
+                } else {
+                    rep(NA_character_, nrow(df))
+                }              # party identification
+  )
+}
+
+cces <- rbind(
+    make_df(cces_2016, 2016), 
+    make_df(cces_2018, 2018),
+    make_df(cces_2020, 2020), 
+    make_df(cces_2022, 2022), 
+    make_df(cces_2024, 2024)
+)
+```
+
+Additionally, we need some non-disclosure variables that indicate whether the respondent disclosed their information for this question or not. To create these, we will consider any response that is "Prefer not to say" or "Skipped" as non-disclosure. Not being asked the question or having an answer of `NA` won't be considered non-disclosure, as non-disclosure must be voluntarily and purposeful. A person who does not receive a question does not get the choice to disclose or not disclose. Every other response will be considered disclosure.
+
+```{r}
+make_nondisclosed <- function(x) {
+    x_char <- tolower(trimws(as.character(x)))
+
+    case_when(
+        # Missing / not asked
+        is.na(x) | is.na(x_char) | x_char %in% c(
+            "not asked",
+            "__na__",
+            "na",
+            "n/a",
+            ""
+        ) ~ NA_real_,
+
+        # Non-disclosure
+        x_char %in% c("prefer not to say", "skipped", "refused") ~ 1,
+
+        # Everything else = disclosure
+        TRUE ~ 0
+    )
+}
+
+sensitive_vars <- c(
+    "faminc",
+    "sexuality",
+    "trans",
+    "religion",
+    "employ",
+    "ownhome",
+    "pid3_t"
+)
+
+# for var in sensitive_vars: cces$nd_{var} = make_nondisclosed(cces${var})
+for (var in sensitive_vars) {
+    cces[[paste0("nd_", var)]] <- make_nondisclosed(cces[[var]])
+}
+
+nondisclosure_vars <- paste0("nd_", sensitive_vars)
+```
+
+We can create a non-disclosure index by averaging the non-disclosure indicators across all of our sensitive variables. This will give us a more stable measure of non-disclosure, since non-disclosure for any single question may be relatively rare.
+
+```{r}
+cces$nondisclosure_index <- rowMeans(
+    cces[, nondisclosure_vars],
+    na.rm = TRUE
+)
+
+cces %>%
+    group_by(year, is_ca) %>%
+    summarise(
+        mean_nondisclosure_index = mean(nondisclosure_index, na.rm = TRUE),
+        n = n(),
+        .groups = "drop"
+    )
+```
+
+Finally, we create a summary table of the mean non-disclosure index and our given predictors (being from California and being in the post-treatment period) to get a sense of the data before we run any regressions.
+```{r}
+cces$post <- as.integer(cces$year >= 2020)
+
+cces %>%
+    summarise(
+        N = n(),
+
+        mean_nondisclosure = mean(nondisclosure_index, na.rm = TRUE),
+        sd_nondisclosure = sd(nondisclosure_index, na.rm = TRUE),
+
+        mean_nd_faminc = mean(cces$nd_faminc, na.rm = TRUE),
+        mean_nd_sexuality = mean(cces$nd_sexuality, na.rm = TRUE),
+        mean_nd_trans = mean(cces$nd_trans, na.rm = TRUE),
+        mean_nd_religion = mean(cces$nd_religion, na.rm = TRUE),
+        mean_nd_employ = mean(cces$nd_employ, na.rm = TRUE),
+        mean_nd_ownhome = mean(cces$nd_ownhome, na.rm = TRUE),
+        mean_nd_pid3_t = mean(cces$nd_pid3_t, na.rm = TRUE),
+
+        mean_ca = mean(is_ca, na.rm = TRUE),
+
+        mean_post = mean(post, na.rm = TRUE)
+    )
+```
+
+It seems like the non-disclosure rates are generally driven by family income, sexual orientation, and transgender identity, and that mean non-disclosure index is being dampened by the lower non-disclosure rates for the other questions. To address this, we'll create two indexes, one that includes all of the questions, and another that only includes the three questions with the highest non-disclosure rates. We'll call the first one the "broad" non-disclosure index, and the second one the "narrow" non-disclosure index.
+
+```{r}
+# remove the old non-disclosure index first since we'll be creating two new ones
+cces <- cces %>%
+    select(-nondisclosure_index)
+
+cces$nondisclosure_index_broad <- rowMeans(
+    cces[, paste0("nd_", sensitive_vars)],
+    na.rm = TRUE
+)
+
+cces$nondisclosure_index_narrow <- rowMeans(
+    cces[, paste0("nd_", c("faminc", "sexuality", "trans"))],
+    na.rm = TRUE
+)
+```
+
+# Analysis
+
+## Empirical Strategy
+
+Our analysis will use a Difference in Differences (DiD) approach. DiD is a quasi-experimental design that allows us to estimate the causal effect of a treatment or intervention by comparing changes in outcomes over time between a treatment group and some control group. The most basic assumption for DiD is the "parallel trends" assumption, which states that in the absence of treatment, the average change in the outcome variable would've been the same for both the treatment and control groups. Another way to put this is that the treatment and control groups would have approximately parallel lines when we plot the outcome variable over time, before the treatment is applied.
+
+We'll define our treatment group as respondents from California, and our control group as respondents from the rest of the United States. The treatment is the implementation of the CCPA in 2020. More formally, our DiD model can be specified as follows:
+
+$$Y_{it} = \beta_0 + \beta_1 \text{California}_i + \beta_2 \text{Post}_t + \beta_3 (\text{California}_i \times \text{Post}_t) + \epsilon_{it}$$
+
+where:
+
+- $Y_{it}$ is the non-disclosure index for respondent $i$ at time $t$.
+
+- $\beta_0$ is the intercept term.
+
+- $\text{California}_i$ is a binary variable that equals 1 if respondent $i$ is from California and 0 otherwise.
+
+- $\text{Post}_t$ is a binary variable that equals 1 for years after the implementation of the CCPA (2020, 2022, 2024) and 0 for years before (2016, 2018).
+
+- $\text{California}_i \times \text{Post}_t$ is the interaction term that captures the DiD effect, which is the main coefficient of interest. A positive and statistically significant $\beta_3$ would indicate that the CCPA has led to an increase in non-disclosure rates in California relative to the rest of the US.
+
+- $\epsilon_{it}$ is the error term.
+
+Our hypothesis can be restated in terms of the DiD model as follows:
+
+$$H_0 : \beta_3 = 0$$
+$$H_A : \beta_3 > 0$$
+
+## Assumptions
+
+We assume that the CCES sampling method is consistent across years and that there are no major changes in the survey design that could differentially affect respondents from California compared to the rest of the US, and that California respondents before and after the CCPA's passing are reasonably comparable.
+
+As for our parallel trends assumption, we visually inspect this using a plot of the mean non-disclosure over time in California compared to the rest of the US.
+
+### Broad Non-Disclosure Index
+
+```{r}
+plot_nd_index <- function(index_var, index_name) {
+    trend_df <- cces %>%
+        group_by(year, is_ca) %>%
+        summarize(
+            mean_nondisclosure = mean(
+                .data[[index_var]],
+                na.rm = TRUE
+            ),
+            .groups = "drop"
+        ) %>%
+        mutate(
+            group = ifelse(
+                is_ca == 1,
+                "California",
+                "Rest of US"
+            )
+        )
+
+    ggplot(
+        trend_df,
+        aes(
+            x = year,
+            y = mean_nondisclosure,
+            color = group
+        )
+    ) +
+        geom_line(linewidth = 1.2) +
+        geom_point(size = 2) +
+
+        geom_vline(
+            xintercept = 2020,
+            linetype = "dashed",
+            alpha = 0.6
+        ) +
+
+        scale_x_continuous(
+            breaks = c(2016, 2018, 2020, 2022, 2024)
+        ) +
+
+        scale_y_continuous(
+            labels = scales::percent_format(accuracy = 0.1)
+        ) +
+
+        labs(
+            title = paste0(index_name, " Over Time"),
+            subtitle = "California vs. Rest of United States",
+            x = "Survey Year",
+            y = "Average Non-Disclosure Rate",
+            color = NULL
+        ) +
+
+        theme_minimal(base_size = 13) +
+
+        theme(
+            legend.position = "top",
+            plot.title = element_text(face = "bold")
+        )
+}
+
+plot_nd_index("nondisclosure_index_broad", "Broad Non-Disclosure Index")
+```
+
+The parallel trends assumption does not seem to reasonably hold for the broad non-disclosure index, since California seems to have had a diverging, increasing non-disclosure rate since 2018, even before the CCPA was passed, whereas the rest of the US had a decreasing non-disclosure rate. Because of this, we cannot confidently attribute any post-2020 differences in non-disclosure rates to the CCPA, since California was already on a different trajectory compared to the rest of the US before the treatment was applied.
+
+### Narrow Non-Disclosure Index
+
+```{r}
+plot_nd_index("nondisclosure_index_narrow", "Narrow Non-Disclosure Index")
+```
+
+The same issue with our parallel trends assumption seems to hold for the narrow non-disclosure index as well, indicating that the low-non-disclosure questions are not what's driving the diverging trends in non-disclosure between California and the rest of the US. One possible explanation for this is that the passing of the CCPA may have been apart of an anticipatory effect that caused Californians to start changing their disclosure behavior even before the law was officially passed in 2018. But, this is purely speclative and we cannot make any strong claims about the mechanisms driving these trends without further research.
+
+One important thing to note is that in both graphs, the non-disclosure rates for California are typically much higher than the rest of the US no matter the year. Another point to note is that in 2020, this non-disclosure rate spiked for both California and the rest of the US, before sharply decreasing in the following years.
+
+## Regression Results
+
+Nevertheless, we will proceed with our regression analysis to see if we can detect any significant effects post-treatment.
+
+The coefficient of interest is going to be for the variable `is_ca:post`, which is the same $\beta_3$.
+
+### Broad Non-Disclosure Index
+
+```{r}
+model_broad <- lm(
+  nondisclosure_index_broad ~ is_ca * post,
+  data = cces
+)
+summary(model_broad)
+```
+
+Our results show a positive, marginally statistically significant coefficient for the interaction term. California's post-2020 non-disclosure rate increased by about 0.32 percentage points relative to the rest of the US, compared to pre-2020 differences. However, this result is not statistically significant at the $\alpha = 0.05$ level. It is, however, significant at the $\alpha = 0.10$ level, which means that we have some weak, suggestive (rather than conclusive) evidence to reject the null hypothesis in favor of the alternative hypothesis.
+
+The probability that, assuming that there is actually no effect of 2020 and onwards on California's non-disclosure index relative to the rest of the US, we would observe an effect as large as 0.32 percentage points or larger just by random chance is about 5.25\%, which is only marginally above the conventional 5\% threshold for statistical significance.
+
+### Narrow Non-Disclosure Index
+
+```{r}
+model_narrow <- lm(
+  nondisclosure_index_narrow ~ is_ca * post,
+  data = cces
+)
+summary(model_narrow)
+```
+
+The results for the narrow non-disclosure index are similar to the broad non-disclosure index, however, the coefficient for the interaction term is actually larger at about 0.34 percentage points, and the p-value is smaller at 0.0439, which is statistically significant at the $\alpha = 0.05$ level. This suggests that California divergence is more concentrated in highly sensitive questions compared to the broader set of questions that received less non-disclosure on average.
+    
+Importantly, in both regressions, we see that the coefficient for `post` is negative and highly statistically significant, which indicates that nondisclosure nationally declines after 2020 relative to the pre-period average, which is consistent with the sharp drop in non-disclosure we saw in the above graphs.
+
+# Conclusion
+
+Overall, our analysis provides weak to moderate suggestive evidence that there was an increase in non-disclosure rates in California relative to the rest of the US following the implementation period of the CCPA. However, we cannot confidently attribute this increase to the CCPA for a few reasons:
+
+1. The parallel trends assumption does not seem to hold for either the broad or narrow non-disclosure index. As we've seen, Californians seemed to have been on a diverging trajectory of increasing non-disclosure even before the CCPA was passed, and so our post-2020 DiD estimate may no longer be capturing the causal effect of the CCPA, but rather just the continuation of pre-existing trends.
+
+2. COVID-19 began to spread in the US in early 2020, which coincides with the implementation of the CCPA. It could be possible that the shock of the pandemic, rather than the CCPA, caused the observed spike in non-disclosure rates in 2020, and that the subsequent drop in non-disclosure rates after 2020 is just a reversion to the mean as the shock of the pandemic subsides. This explanation would also be consistent with the fact that we see a similar spike in both non-disclosure indexes for both California and the rest of the US. Such a spike would be less likely to be explained by the CCPA, since the CCPA should have only directly affected Californians by the mechanism we described in our hypothesis. Perhaps the stresses of COVID-19 led to more survey fatigue by respondents, which could have caused more people to skip questions or choose "prefer not to say" options.
+
+3. Non-disclosure rates are generally quite low, which means that even small differences in non-disclosure rates can lead to large percentage changes. We tried to prevent this using our non-disclosure index, but it's still possible that random noise is driving some of the observed differences in non-disclosure rates as opposed to the CCPA actually having a causal effect on non-disclosure.
+
+## Future Work
+
+To analyze the effect of confounding factors like COVID-19, future work should conduct a more in-depth analysis of non-disclosure, possibly by using a triple differences (DiDiD) approach that compares Californians to the rest of the US, before and after 2020, and also across questions that are sensitive vs. non-sensitive. For example, imagine that a survey asked the respondent for their age (a typically non-sensitive question), and also allowed for non-disclosure for this age question. If we see a similar spike in non-disclosure for the age question in 2020 as we do for the family income, sexuality, and transgender identity questions, then this would be evidence that the spike in non-disclosure is not specific to sensitive questions and is more likely to be explained by some other confounding factor, such as COVID-19.
+
+However, the CCES does not ask many non-sensitive questions that allow for non-disclosure, so other datasets may be better suited for this type of analysis. Future work could also try to analyze the effect of the CCPA on other outcomes more closely related to consumer behavior, such as enabling telemetry or cookie tracking on websites, or even purchasing behavior.
+
+\newpage
+
+# Works Cited
+

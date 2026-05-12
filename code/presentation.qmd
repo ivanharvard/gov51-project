@@ -193,3 +193,4 @@ lm(nd_trans ~ is_ca * post + factor(year), data = cces_small)
 ```{r}
 lm(nd_faminc ~ is_ca * placebo_post + factor(year), data = cces_small)
 ```
+

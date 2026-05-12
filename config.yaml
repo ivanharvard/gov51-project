@@ -1,3 +1,7 @@
+# If replicating these results, please download the CCES datasets and place them
+# in the appropriate folders as specified in the config.yaml file.
+# You may also change the path to the datasets in the config.yaml file if you 
+# wish to place them somewhere else.
 default:
   root: !expr Sys.getenv("DATA_DIR", unset = "../data")
 
